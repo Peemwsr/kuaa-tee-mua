@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light">
+<meta name="theme-color" content="#e11d74">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ก๊วนตีมั่ว">
 <title>ก๊วนตีมั่ว — ลงชื่อ จับคู่ คิดเงิน</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -272,6 +279,26 @@ body.sel #toast{bottom:calc(172px + env(safe-area-inset-bottom, 0px))}
 .freemsg{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:#fff;font:700 20px "Prompt","Noto Sans Thai",sans-serif;text-shadow:0 2px 8px rgba(0,30,110,.45);padding:34px 10px}
 .freemsg small{font:500 13px "Noto Sans Thai",sans-serif}
 .rk{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:50%;background:var(--ink);color:#fff;font:700 10.5px "Prompt",sans-serif;flex:none}
+
+/* online + player page */
+body.player{padding-left:0}
+body.player #nav{display:none}
+body.player .app{max-width:640px;padding-bottom:40px}
+.pbanner{position:sticky;top:calc(8px + env(safe-area-inset-top, 0px));z-index:40;border-radius:16px;padding:12px 14px;margin-bottom:12px;color:#fff;box-shadow:0 10px 28px rgba(0,0,0,.25);animation:pop .35s ease}
+.pbanner.turn{background:linear-gradient(135deg,var(--brand),var(--brand2))}
+.pbanner.near{background:linear-gradient(135deg,#f59e0b,#ea580c)}
+.pbanner .bt{display:flex;justify-content:space-between;align-items:center;font:700 17px "Prompt","Noto Sans Thai",sans-serif}
+.pbanner .bx{border:0;background:rgba(255,255,255,.25);color:#fff;border-radius:50%;width:28px;height:28px;cursor:pointer}
+.pstat{text-align:center}
+.pstat .who{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:8px}
+.pstat .who i{font-style:normal;color:var(--muted);font-size:13px}
+.pstat .pbig{font:700 26px/1.25 "Prompt","Noto Sans Thai",sans-serif}
+.pstat .psmall{color:var(--muted);margin-bottom:8px}
+.pstat.play{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0}
+.pstat.play .psmall,.pstat.play .who i{color:rgba(255,255,255,.92)}
+.pstat.near{background:#fff4d6;border-color:#f7d070}
+.chip.me{box-shadow:0 0 0 3px var(--lime),0 0 0 5px var(--ink)}
+@keyframes pop{from{transform:translateY(-8px);opacity:0}to{transform:none;opacity:1}}
 </style>
 </head>
 <body>
@@ -341,7 +368,7 @@ function load(){
   }catch(e){}
   return defaultState();
 }
-function save(){ archive(); try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
+function save(){ archive(); try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} onSaved(); }
 var S = load();
 
 /* transient UI state (ไม่เก็บถาวร) */
@@ -609,7 +636,7 @@ function statStrip(){
 }
 
 function tabPlayers(){
-  var st = stats(), h = '';
+  var st = stats(), h = onlineCard();
   h += '<div class="card"><h2>ลงชื่อวันนี้</h2>'+
     '<div class="addrow"><input id="newName" class="in" placeholder="พิมพ์ชื่อหรือชื่อเล่น" autocomplete="off" maxlength="30">'+
     '<select id="newLevel" class="in lv" aria-label="ระดับมือ">'+levelOpts(lastLevel)+'</select>'+
@@ -1277,6 +1304,8 @@ function onField(el){
   }else if(k === 'e'){
     var e = S.expenses.find(function(x){ return x.id === id; }); if(!e) return;
     e[f] = val;
+  }else if(k === 'o'){
+    onOnlineField(f, val); return;
   }else if(k === 'h'){
     var pid = el.dataset.pid;
     if(id === S.sid){ var cp = P(pid); if(cp) cp.paid = val; }
@@ -1306,9 +1335,458 @@ document.addEventListener('change', function(ev){
 });
 document.addEventListener('keydown', function(ev){
   if(ev.key === 'Enter' && ev.target && ev.target.id === 'newName'){ ev.preventDefault(); A.addPlayer(); }
+  if(ev.key === 'Enter' && ev.target && ev.target.id === 'pName'){ ev.preventDefault(); A.pJoin(); }
 });
 
-render();
+/* =====================================================================
+   ออนไลน์: ผู้จัดการ (ซิงก์รายชื่อ/กระดานคิว/ส่งแจ้งเตือน) + หน้าผู้เล่น
+   ===================================================================== */
+var CFG = {url:'', key:'', vapid:''};   // ใส่ค่าตายตัวตรงนี้ได้ (ไม่บังคับ) ถ้าไม่ใส่ ผู้จัดการกรอกในแอป
+var ON_KEY = 'kuaa-online-v1';
+function loadOn(){
+  var d = {url:'', key:'', vapid:'', code:'', adminKey:'', linked:false, open:true, cap:60, pushOn:true};
+  try{ var o = JSON.parse(localStorage.getItem(ON_KEY) || 'null'); if(o) Object.keys(d).forEach(function(k){ if(o[k] !== undefined) d[k] = o[k]; }); }catch(e){}
+  if(CFG.url) d.url = CFG.url; if(CFG.key) d.key = CFG.key; if(CFG.vapid) d.vapid = CFG.vapid;
+  return d;
+}
+var ON = loadOn();
+function saveOn(){ try{ localStorage.setItem(ON_KEY, JSON.stringify(ON)); }catch(e){} }
+var onlineOpen = false, onlineStatus = {ok:null, at:0, err:'', count:0, pubAt:0, push:null};
+var syncTimer = null, syncBusy = false, pubT = null, lastPub = {meta:'', at:0}, pendingRender = false;
+var prevPlaying = null, prevNear = null;
+
+var ERR = {
+  name_taken:'ชื่อนี้มีคนใช้แล้ว ลองใส่ชื่อเล่นอื่น หรือเติมตัวเลขต่อท้าย', closed:'ผู้จัดการปิดรับลงชื่อแล้ว', full:'รายชื่อเต็มแล้ว',
+  bad_name:'ชื่อต้องยาว 1–30 ตัวอักษร', no_group:'ไม่พบก๊วนนี้ (อาจถูกลบแล้ว)', forbidden:'รหัสไม่ถูกต้อง',
+  busy:'มีคนลงชื่อพร้อมกันเยอะ ลองใหม่อีกสักครู่', code_taken:'โค้ดก๊วนนี้มีคนใช้แล้ว เลือกโค้ดอื่น',
+  bad_code:'โค้ดก๊วนใช้ได้เฉพาะ a-z 0-9 และขีด ยาว 4–24 ตัว', weak_key:'รหัสผู้จัดการต้องยาวอย่างน้อย 6 ตัวอักษร', too_big:'ข้อมูลใหญ่เกินไป'
+};
+function errText(e){ var c = e && (e.code || e.message); return ERR[c] || ('เชื่อมต่อไม่สำเร็จ ('+(c || 'ไม่ทราบสาเหตุ')+')'); }
+function b64u(s){ return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function unb64u(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length % 4) s += '='; return atob(s); }
+/* คีย์แบบ JWT (eyJ…) ส่งทั้ง apikey และ Authorization ส่วนคีย์แบบใหม่ sb_publishable_… ส่งเฉพาะ apikey */
+function keyHeaders(key){ var h = {'Content-Type':'application/json', apikey:key}; if(/^eyJ/.test(key)) h.Authorization = 'Bearer '+key; return h; }
+function sb(cfg, fn, args){
+  var base = String(cfg.url || '').replace(/\/+$/, '');
+  return fetch(base+'/rest/v1/rpc/'+fn, {method:'POST', headers:keyHeaders(cfg.key), body:JSON.stringify(args || {})})
+    .then(function(r){
+      return r.json().catch(function(){ return null; }).then(function(j){
+        if(!r.ok){ var e = new Error((j && j.message) || ('http_'+r.status)); e.code = (j && j.message) || ''; throw e; }
+        return j;
+      });
+    });
+}
+function inviteLink(){
+  var base = location.href.split('#')[0].split('?')[0];
+  var baked = CFG.url && CFG.key;
+  return base + '#j=' + ON.code + (baked ? '' : '&c='+b64u(JSON.stringify({u:ON.url, k:ON.key, v:ON.vapid || ''})));
+}
+function inviteText(){
+  return '🏸 '+S.title+'\nลงชื่อเล่นวันนี้ได้เองที่ลิงก์นี้ 👇\n'+inviteLink()+'\n\nเปิดลิงก์ → ใส่ชื่อเล่น → กด ลงชื่อ\nอยากให้แจ้งเตือนตอนถึงคิว กด 🔔 เปิดการแจ้งเตือน ในหน้านั้น\n(ถ้าเปิดใน LINE แล้วแจ้งเตือนไม่ขึ้น ให้กด ⋯ แล้วเลือก เปิดในเบราว์เซอร์)';
+}
+function copyPlain(t, done){
+  var fb = function(){ try{ var ta = document.createElement('textarea'); ta.value = t; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); var ok = document.execCommand('copy'); ta.remove(); done(!!ok); }catch(e){ done(false); } };
+  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(function(){ done(true); }, fb); else fb();
+}
+
+/* ---------------- ผู้จัดการ: การ์ดตั้งค่า ---------------- */
+function onlineCard(){
+  var h = '';
+  if(!ON.linked){
+    h += '<div class="card"><div class="rowhead"><h2>🌐 ให้สมาชิกลงชื่อเอง</h2><button class="btn sm ghost" data-act="onToggle">'+(onlineOpen ? 'ซ่อน' : 'ตั้งค่า')+'</button></div>'+
+      '<p class="hint" style="margin:0">สมาชิกกดลิงก์ ใส่ชื่อ แล้วลงชื่อเองได้ ดูคิวสด และรับแจ้งเตือนตอนถึงคิว ต้องตั้งค่าฐานข้อมูลฟรีครั้งเดียว (ดูคู่มือ SETUP.md) และใช้ได้เมื่อเปิดแอปจากเว็บที่ขึ้นโฮสต์เอง เช่น GitHub Pages</p>';
+    if(onlineOpen){
+      var fixed = CFG.url && CFG.key;
+      h += (fixed ? '' : '<label class="fl" style="margin-top:12px">Supabase Project URL<input class="in" data-f="o:url" value="'+esc(ON.url)+'" placeholder="https://xxxx.supabase.co" autocomplete="off"></label>'+
+        '<label class="fl">anon public key<input class="in" data-f="o:key" value="'+esc(ON.key)+'" placeholder="eyJ… หรือ sb_publishable_…" autocomplete="off"></label>'+
+        '<label class="fl">VAPID public key (สำหรับ Web Push ไม่บังคับ)<input class="in" data-f="o:vapid" value="'+esc(ON.vapid)+'" placeholder="B…" autocomplete="off"></label>')+
+        '<div class="two"><label class="fl">โค้ดก๊วน (a-z 0-9 -)<input class="in" data-f="o:code" value="'+esc(ON.code)+'" placeholder="tee-mua" autocomplete="off" autocapitalize="none"></label>'+
+        '<label class="fl">รหัสผู้จัดการ (6 ตัวขึ้นไป)<input class="in" type="password" data-f="o:adminKey" value="'+esc(ON.adminKey)+'" autocomplete="new-password"></label></div>'+
+        '<div class="btnrow"><button class="btn" data-act="onCreate">สร้างก๊วนออนไลน์</button><button class="btn ghost" data-act="onLink">เชื่อมก๊วนที่มีอยู่แล้ว</button></div>'+
+        (onlineStatus.err ? '<p class="hint" style="color:var(--danger)">'+esc(onlineStatus.err)+'</p>' : '');
+    }
+    return h + '</div>';
+  }
+  var st = onlineStatus, okLine;
+  if(st.ok === false) okLine = '<span class="old">❌ '+esc(st.err || 'เชื่อมต่อไม่ได้')+'</span>';
+  else if(st.ok) okLine = '<span class="okk">✅ ซิงก์ล่าสุด '+esc(new Date(st.at).toTimeString().slice(0,8))+'</span> · ลงชื่อออนไลน์ '+st.count+' คน';
+  else okLine = 'กำลังเชื่อมต่อ…';
+  var askD = confirmKey === 'onDel', askU = confirmKey === 'onUnlink';
+  h += '<div class="card"><div class="rowhead"><h2>🌐 ก๊วนออนไลน์</h2><span class="tag">โค้ด '+esc(ON.code)+'</span></div>'+
+    '<p class="hint" style="margin:0 0 10px">'+okLine+'</p>'+
+    '<div class="lbl">ลิงก์เชิญ ส่งให้สมาชิกใน LINE</div><input class="in" readonly value="'+esc(inviteLink())+'" onclick="this.select()">'+
+    '<div class="btnrow"><button class="btn" data-act="onCopy">📋 คัดลอกข้อความเชิญ</button></div>'+
+    '<div class="togs" style="margin-top:12px"><button class="tog'+(ON.open?' on':'')+'" data-act="onOpen">'+(ON.open ? 'กำลังรับลงชื่อ' : 'ปิดรับลงชื่อ')+'</button>'+
+    '<button class="tog'+(ON.pushOn?' on':'')+'" data-act="onPush">'+(ON.pushOn ? '🔔 แจ้งเตือนถึงคิว: เปิด' : '🔕 แจ้งเตือนถึงคิว: ปิด')+'</button></div>'+
+    '<label class="fl" style="margin-top:12px">รับสูงสุด (คน)<input class="in" type="number" inputmode="numeric" min="4" max="300" data-f="o:cap" value="'+ON.cap+'" style="max-width:140px"></label>'+
+    '<div class="btnrow"><button class="btn sm ghost" data-act="onSync">🔄 ซิงก์ตอนนี้</button>'+
+    '<button class="btn sm ghost'+(askU?' ask':'')+'" data-act="onUnlink">'+(askU ? 'กดอีกครั้งเพื่อยืนยัน' : 'ยกเลิกการเชื่อมต่อ')+'</button>'+
+    '<button class="btn sm danger'+(askD?' ask':'')+'" data-act="onDelete">'+(askD ? 'กดอีกครั้งเพื่อลบ' : 'ลบก๊วนออนไลน์')+'</button></div>'+
+    '<p class="hint">รายชื่อที่สมาชิกลงเองจะเข้ามาในรายชื่อด้านล่างอัตโนมัติ (ซิงก์ทุก 6 วินาทีขณะเปิดหน้านี้ไว้) เปิดแอปผู้จัดการทิ้งไว้ตลอดก๊วนเพื่อให้กระดานคิวและแจ้งเตือนทำงาน</p></div>';
+  return h;
+}
+function onOnlineField(f, val){
+  if(f === 'cap'){ ON.cap = Math.min(300, Math.max(4, Math.round(+val || 60))); saveOn(); if(ON.linked) publishBoard(true).catch(function(){}); return; }
+  ON[f] = String(val).trim(); if(f === 'code') ON.code = ON.code.toLowerCase(); saveOn();
+}
+function softRender(){
+  var a = document.activeElement;
+  if(a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)){ pendingRender = true; return; }
+  render();
+}
+document.addEventListener('focusout', function(){ if(pendingRender){ pendingRender = false; setTimeout(function(){ if(!PCODE) render(); }, 60); } });
+
+function reconcileSignups(list){
+  var changed = false;
+  list.forEach(function(sg){
+    var p = S.players.find(function(x){ return x.sid === sg.sid; });
+    if(!p){
+      if(sg.status !== 'in') return;
+      var ex = S.players.find(function(x){ return !x.sid && x.name.trim().toLowerCase() === String(sg.name).trim().toLowerCase(); });
+      if(ex){ ex.sid = sg.sid; ex.sver = sg.ver; if(!ex.in){ ex.in = true; joinLate(ex); } changed = true; return; }
+      p = {id:uid(), name:sg.name, level:sg.level, in:true, rest:false, paid:false, base:0, sid:sg.sid, sver:sg.ver};
+      S.players.push(p); joinLate(p); changed = true; return;
+    }
+    if(sg.ver > (p.sver || 0)){
+      p.sver = sg.ver; changed = true;
+      if(sg.name && sg.name !== p.name) p.name = sg.name;
+      p.level = sg.level;
+      if(sg.status === 'in' && !p.in){ p.in = true; joinLate(p); }
+      else if(sg.status === 'out' && p.in){ p.in = false; }
+    }
+  });
+  return changed;
+}
+
+function buildBoard(){
+  var st = stats(), order = queueOrder();
+  var nm = function(id){ var p = P(id); return p ? {n:p.name, s:p.sid || null, l:p.level} : {n:'?', s:null, l:3}; };
+  return {
+    v:1, title:S.title, date:S.date, venue:S.venue,
+    courts:S.courts.filter(function(c){ return c.on || gameOnCourt(c.id); }).map(function(c){
+      var g = gameOnCourt(c.id);
+      return {id:c.id, name:c.name, time:(c.start && c.end) ? c.start+'–'+c.end : '', on:!!c.on,
+        game: g ? {no:g.no, t0:g.t0 || 0, a:g.a.map(nm), b:g.b.map(nm)} : null};
+    }),
+    queue:order.map(function(p){ return {n:p.name, s:p.sid || null, g:st.g[p.id] || 0}; }),
+    rest:S.players.filter(function(p){ return p.in && p.rest; }).map(function(p){ return {n:p.name, s:p.sid || null}; }),
+    done:doneGames().length, people:S.players.filter(function(p){ return p.in; }).length
+  };
+}
+function publishBoard(force){
+  if(!ON.linked) return Promise.resolve();
+  var b = buildBoard(), meta = JSON.stringify(b)+'|'+ON.open+'|'+ON.cap+'|'+S.title;
+  if(!force && meta === lastPub.meta && Date.now() - lastPub.at < 30000) return Promise.resolve();
+  b.t = Date.now();
+  return sb(ON, 'kuaa_publish_board', {p_code:ON.code, p_admin_key:ON.adminKey, p_board:b, p_title:S.title, p_open:ON.open, p_capacity:ON.cap})
+    .then(function(){ lastPub = {meta:meta, at:Date.now()}; onlineStatus.pubAt = Date.now(); });
+}
+function schedulePublish(){ clearTimeout(pubT); pubT = setTimeout(function(){ publishBoard(false).catch(function(e){ onlineStatus.ok = false; onlineStatus.err = errText(e); softRender(); }); }, 600); }
+
+function teamText(g){
+  var n = function(id){ var p = P(id); return p ? p.name : '?'; };
+  return n(g.a[0])+' + '+n(g.a[1])+' พบ '+n(g.b[0])+' + '+n(g.b[1]);
+}
+/* เปรียบเทียบสถานะก่อน/หลัง: ใครเพิ่งได้ลงสนาม / เพิ่งเข้า 4 คิวถัดไป → ส่ง Web Push */
+function notifyDiff(){
+  if(!ON.linked || !ON.pushOn){ prevPlaying = prevNear = null; return; }
+  var playing = {}, near = {};
+  activeGames().forEach(function(g){ var c = C(g.cid); g.a.concat(g.b).forEach(function(id){ var p = P(id); if(p && p.sid) playing[p.sid] = {g:g, court:c ? c.name : 'คอร์ท'}; }); });
+  queueOrder().slice(0,4).forEach(function(p,i){ if(p.sid) near[p.sid] = i+1; });
+  if(prevPlaying === null){ prevPlaying = Object.keys(playing); prevNear = Object.keys(near); return; }
+  var targets = [];
+  Object.keys(playing).forEach(function(sid){
+    if(prevPlaying.indexOf(sid) < 0){ var i = playing[sid]; targets.push({sid:sid, kind:'turn', tag:'turn', title:'ถึงคิวแล้ว! 🏸', body:'ลง '+i.court+' · เกมที่ '+i.g.no+' — '+teamText(i.g)}); }
+  });
+  Object.keys(near).forEach(function(sid){
+    if(prevNear.indexOf(sid) < 0 && !playing[sid]) targets.push({sid:sid, kind:'near', tag:'near', title:'ใกล้ถึงคิวแล้ว ⏳', body:'เตรียมตัวได้เลย ตอนนี้คุณเป็นคิวที่ '+near[sid]});
+  });
+  prevPlaying = Object.keys(playing); prevNear = Object.keys(near);
+  if(targets.length) sendPush(targets);
+}
+function sendPush(targets){
+  var link = inviteLink();
+  targets.forEach(function(t){ t.url = link; });
+  fetch(String(ON.url).replace(/\/+$/,'')+'/functions/v1/notify', {method:'POST', headers:keyHeaders(ON.key),
+    body:JSON.stringify({code:ON.code, adminKey:ON.adminKey, targets:targets})})
+    .then(function(r){ return r.json(); }).then(function(j){ onlineStatus.push = j; }).catch(function(){ onlineStatus.push = {error:true}; });
+}
+function onSaved(){
+  if(typeof ON === 'undefined' || !ON || !ON.linked || PCODE) return;
+  notifyDiff(); schedulePublish();
+}
+function syncNow(){
+  if(!ON.linked || syncBusy) return Promise.resolve();
+  syncBusy = true;
+  return sb(ON, 'kuaa_list_signups', {p_code:ON.code, p_admin_key:ON.adminKey}).then(function(list){
+    var changed = reconcileSignups(list), was = onlineStatus.ok;
+    onlineStatus.ok = true; onlineStatus.at = Date.now(); onlineStatus.err = '';
+    onlineStatus.count = list.filter(function(x){ return x.status === 'in'; }).length;
+    if(changed){ save(); softRender(); } else if(S.tab === 'players' && (was !== true)) softRender();
+    return publishBoard(false);
+  }).catch(function(e){ onlineStatus.ok = false; onlineStatus.err = errText(e); if(S.tab === 'players') softRender(); })
+    .then(function(){ syncBusy = false; });
+}
+function startOnline(){
+  clearInterval(syncTimer);
+  if(ON.linked){ syncNow(); syncTimer = setInterval(syncNow, 6000); }
+}
+function linkOnline(){ ON.linked = true; saveOn(); prevPlaying = prevNear = null; lastPub = {meta:'', at:0}; onlineStatus = {ok:null, at:0, err:'', count:0, pubAt:0, push:null}; startOnline(); render(); }
+function needCfg(){
+  if(!ON.url || !ON.key){ onlineStatus.err = 'กรอก Project URL และ anon key ก่อน'; render(); return true; }
+  if(!ON.code || !ON.adminKey){ onlineStatus.err = 'กรอกโค้ดก๊วนและรหัสผู้จัดการก่อน'; render(); return true; }
+  return false;
+}
+A.onToggle = function(){ onlineOpen = !onlineOpen; render(); };
+A.onCreate = function(){
+  if(needCfg()) return; onlineStatus.err = '';
+  sb(ON, 'kuaa_create_group', {p_code:ON.code, p_title:S.title, p_admin_key:ON.adminKey}).then(function(){ toast('สร้างก๊วนออนไลน์แล้ว'); linkOnline(); })
+    .catch(function(e){ onlineStatus.err = errText(e); render(); });
+};
+A.onLink = function(){
+  if(needCfg()) return; onlineStatus.err = '';
+  sb(ON, 'kuaa_check_admin', {p_code:ON.code, p_admin_key:ON.adminKey}).then(function(ok){
+    if(ok){ toast('เชื่อมก๊วนแล้ว'); linkOnline(); } else { onlineStatus.err = 'ไม่พบก๊วนนี้ หรือรหัสผู้จัดการไม่ถูกต้อง'; render(); }
+  }).catch(function(e){ onlineStatus.err = errText(e); render(); });
+};
+A.onSync = function(){ onlineStatus.ok = null; render(); syncNow(); publishBoard(true).catch(function(){}); };
+A.onOpen = function(){ ON.open = !ON.open; saveOn(); publishBoard(true).catch(function(){}); render(); };
+A.onPush = function(){ ON.pushOn = !ON.pushOn; saveOn(); prevPlaying = prevNear = null; if(ON.pushOn) notifyDiff(); render(); };
+A.onCopy = function(){ copyPlain(inviteText(), function(ok){ toast(ok ? 'คัดลอกข้อความเชิญแล้ว วางใน LINE ได้เลย' : 'คัดลอกอัตโนมัติไม่ได้ ให้คัดลอกลิงก์ในช่องด้านบนเอง'); }); };
+A.onUnlink = function(){ ask('onUnlink', function(){ clearInterval(syncTimer); ON.linked = false; saveOn(); onlineOpen = false; toast('ยกเลิกการเชื่อมต่อแล้ว (ก๊วนออนไลน์ยังอยู่บนเซิร์ฟเวอร์)'); render(); }); };
+A.onDelete = function(){ ask('onDel', function(){
+  sb(ON, 'kuaa_delete_group', {p_code:ON.code, p_admin_key:ON.adminKey}).then(function(){ clearInterval(syncTimer); ON.linked = false; ON.code = ''; saveOn(); toast('ลบก๊วนออนไลน์แล้ว'); render(); })
+    .catch(function(e){ toast(errText(e)); });
+}); };
+
+/* =====================================================================
+   หน้าผู้เล่น
+   ===================================================================== */
+var PS = {code:'', cfg:null, me:null, meInfo:null, data:null, err:'', loaded:false, banner:null, prev:null, soundOn:false, audio:null, notifMsg:'', swReg:null, lastMe:0, pendingP:false};
+var PKEY = 'kuaa-cfg', PME = function(code){ return 'kuaa-me-'+code; };
+function isStandalone(){ return window.navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches); }
+function playerRoute(){
+  var m = /[#&?]j=([a-z0-9-]{4,24})/.exec(location.hash + location.search);
+  if(m) return m[1];
+  var hasMgr = false; try{ hasMgr = !!localStorage.getItem(KEY); }catch(e){}
+  if(isStandalone() && !hasMgr){ try{ var last = localStorage.getItem('kuaa-last-j'); if(last) return last; }catch(e){} }
+  return null;
+}
+var PCODE = playerRoute();
+function pLoadCfg(){
+  var m = /[#&]c=([A-Za-z0-9_-]+)/.exec(location.hash), cfg = null;
+  if(m){ try{ var o = JSON.parse(unb64u(m[1])); cfg = {url:o.u, key:o.k, vapid:o.v || ''}; localStorage.setItem(PKEY, JSON.stringify(cfg)); }catch(e){} }
+  if(!cfg && CFG.url && CFG.key) cfg = {url:CFG.url, key:CFG.key, vapid:CFG.vapid || ''};
+  if(!cfg){ try{ cfg = JSON.parse(localStorage.getItem(PKEY) || 'null'); }catch(e){} }
+  if(cfg && CFG.vapid && !cfg.vapid) cfg.vapid = CFG.vapid;
+  return cfg;
+}
+function rnd24(){ var a = new Uint8Array(24); crypto.getRandomValues(a); return Array.prototype.map.call(a, function(x){ return ('0'+x.toString(16)).slice(-2); }).join(''); }
+function urlB64ToU8(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length % 4) s += '='; var r = atob(s), o = new Uint8Array(r.length); for(var i=0;i<r.length;i++) o[i] = r.charCodeAt(i); return o; }
+
+function initPlayer(code){
+  PS.code = code; PS.cfg = pLoadCfg();
+  document.body.classList.add('player');
+  try{ localStorage.setItem('kuaa-last-j', code); }catch(e){}
+  try{ PS.me = JSON.parse(localStorage.getItem(PME(code)) || 'null'); }catch(e){ PS.me = null; }
+  try{ PS.soundOn = localStorage.getItem('kuaa-sound') === '1'; }catch(e){}
+  if(!PS.cfg){ PS.err = 'ลิงก์นี้ไม่มีข้อมูลการเชื่อมต่อ ขอลิงก์ใหม่จากผู้จัดการนะ'; PS.loaded = true; pRender(); return; }
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('sw.js').then(function(r){ PS.swReg = r; }).catch(function(){});
+    navigator.serviceWorker.addEventListener('message', function(ev){ if(ev.data && ev.data.type === 'push') pPoll(); });
+  }
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden){ pPoll(); if(PS.titleBackup){ document.title = PS.titleBackup; PS.titleBackup = null; } } });
+  pRender(); pPoll(); setInterval(pPoll, 5000);
+}
+function pAlertAllowed(){ return typeof Notification !== 'undefined' && Notification.permission === 'granted'; }
+function myState(){
+  var b = PS.data && PS.data.board; if(!PS.me || !b || !b.courts) return null;
+  if(PS.meInfo && PS.meInfo.status === 'out') return {k:'out'};
+  var sid = PS.me.sid, i, c;
+  for(i=0;i<b.courts.length;i++){ c = b.courts[i]; if(c.game && c.game.a.concat(c.game.b).some(function(x){ return x.s === sid; })) return {k:'play', court:c.name, game:c.game}; }
+  var qi = (b.queue || []).findIndex(function(x){ return x.s === sid; });
+  if(qi > -1) return {k:'queue', pos:qi+1, total:b.queue.length, near:qi < 4};
+  if((b.rest || []).some(function(x){ return x.s === sid; })) return {k:'rest'};
+  return {k:'wait'};
+}
+function pPoll(){
+  if(!PS.cfg) return;
+  var tasks = [sb(PS.cfg, 'kuaa_get_board', {p_code:PS.code}).then(function(d){ PS.data = d; PS.err = ''; })];
+  if(PS.me && (Date.now() - PS.lastMe > 15000 || !PS.meInfo)){
+    PS.lastMe = Date.now();
+    tasks.push(sb(PS.cfg, 'kuaa_me', {p_sid:PS.me.sid, p_secret:PS.me.secret}).then(function(m){ PS.meInfo = m; }).catch(function(e){ if(e.code === 'forbidden'){ PS.me = null; PS.meInfo = null; try{ localStorage.removeItem(PME(PS.code)); }catch(_){} } }));
+  }
+  return Promise.all(tasks).then(function(){ PS.loaded = true; pCheckAlerts(); pRender(); })
+    .catch(function(e){ PS.err = errText(e); PS.loaded = true; pRender(); });
+}
+function pCheckAlerts(){
+  var cur = myState(); if(!cur) return;
+  var prev = PS.prev; PS.prev = cur;
+  if(!prev) return;
+  if(cur.k === 'play' && (prev.k !== 'play' || prev.game.no !== cur.game.no)){
+    var g = cur.game, nm = function(x){ return x.n; };
+    pAlert('turn', 'ถึงคิวแล้ว! 🏸', 'ลง '+cur.court+' · เกมที่ '+g.no+' — '+g.a.map(nm).join(' + ')+' พบ '+g.b.map(nm).join(' + '));
+  }else if(cur.k === 'queue' && cur.near && !(prev.k === 'queue' && prev.near)){
+    pAlert('near', 'ใกล้ถึงคิวแล้ว ⏳', 'เตรียมตัวได้เลย ตอนนี้คุณเป็นคิวที่ '+cur.pos);
+  }else if(cur.k !== 'play' && PS.banner && PS.banner.kind === 'turn' && prev.k === 'play'){
+    PS.banner = null;
+  }
+}
+function pAlert(kind, title, body){
+  PS.banner = {kind:kind, title:title, body:body};
+  if(PS.soundOn) beep(kind === 'turn' ? 3 : 2);
+  try{ if(navigator.vibrate) navigator.vibrate(kind === 'turn' ? [300,120,300,120,500] : [200,100,200]); }catch(e){}
+  if(document.hidden){
+    if(!PS.titleBackup) PS.titleBackup = document.title; document.title = '🔔 '+title;
+    if(pAlertAllowed() && PS.swReg && PS.swReg.showNotification){
+      PS.swReg.showNotification(title, {body:body, tag:kind, renotify:true, icon:'icon-192.png', data:{url:location.href}, vibrate:[300,120,300]});
+    }
+  }
+}
+function beep(n){
+  var c = PS.audio; if(!c) return;
+  try{
+    if(c.resume) c.resume();
+    for(var i=0;i<n;i++){
+      var o = c.createOscillator(), g = c.createGain(), t = c.currentTime + i*0.3;
+      o.type = 'sine'; o.frequency.value = i % 2 ? 880 : 1046; o.connect(g); g.connect(c.destination);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.35, t+0.03); g.gain.exponentialRampToValueAtTime(0.0001, t+0.26);
+      o.start(t); o.stop(t+0.28);
+    }
+  }catch(e){}
+}
+function pDate(iso){ return dateBadge(iso); }
+function pChip(x, me){
+  var mine = me && x.s && x.s === me.sid;
+  return '<span class="chip'+(mine ? ' me' : '')+'">'+avatar(x.s || x.n, x.n)+'<span class="cn">'+esc(x.n)+(mine ? ' (คุณ)' : '')+'</span></span>';
+}
+function pCourt(c, me){
+  var g = c.game, h = '<div class="match"><div class="mhead"><span style="font-size:16px;opacity:1">'+esc(c.name)+'</span><span>'+esc(c.time || '')+'</span></div><div class="mcourt">';
+  if(g){
+    h += '<div class="gmeta"><span class="tag">กำลังเล่น · เกมที่ '+g.no+'</span><span class="elapsed" data-t0="'+(g.t0 || 0)+'">'+esc(elapsedText({t0:g.t0}))+'</span></div><div class="cfloor">'+COURT_SVG+'<div class="mbody">'+
+      '<div class="team ta"><div class="tl">ทีม A</div>'+g.a.map(function(x){ return pChip(x, me); }).join('')+'</div><div class="vs"><b>VS</b></div>'+
+      '<div class="team tb"><div class="tl">ทีม B</div>'+g.b.map(function(x){ return pChip(x, me); }).join('')+'</div></div></div></div>';
+  }else{
+    h += '<div class="gmeta"><span class="tag done">สนามว่าง</span><span class="elapsed"></span></div><div class="cfloor free">'+COURT_SVG+'<div class="mbody"><div class="freemsg">สนามว่าง<small>รอผู้จัดการเริ่มเกมใหม่</small></div></div></div></div>';
+  }
+  return h + '</div>';
+}
+function pHTML(){
+  var d = PS.data, b = d && d.board, me = PS.me, h = '';
+  if(PS.banner){
+    h += '<div class="pbanner '+PS.banner.kind+'" role="alert"><div class="bt"><b>'+esc(PS.banner.title)+'</b><button class="bx" data-act="pDismiss" aria-label="ปิด">✕</button></div><div>'+esc(PS.banner.body)+'</div></div>';
+  }
+  var title = d ? d.title : 'ก๊วนแบดมินตัน';
+  var sub = (b && b.date ? esc(thDate(b.date)) : '') + (b && b.venue ? ' • '+esc(b.venue) : '');
+  h += '<div class="hero">'+HERO_ART+'<div class="hcopy"><div class="eyebrow">'+esc(b && b.date ? pDate(b.date) : 'ลงชื่อก๊วน')+'</div><h1>🏸 '+esc(title)+'</h1>'+(sub ? '<div class="sub">'+sub+'</div>' : '')+'</div>'+
+    '<div class="pills"><span>ลงชื่อ '+(d ? d.count : 0)+'/'+(d ? d.capacity : '-')+' คน</span><span>'+(d ? (d.open ? 'เปิดรับลงชื่อ' : 'ปิดรับลงชื่อ') : '…')+'</span></div></div>';
+  if(PS.err && !d){
+    return h + '<div class="card empty"><div class="big">⚠️</div><p>'+esc(PS.err)+'</p><button class="btn ghost" data-act="pRetry">ลองใหม่</button></div>';
+  }
+  if(!PS.loaded) return h + '<div class="card empty"><div class="big">⏳</div><p>กำลังโหลด…</p></div>';
+  h += pMeCard(d);
+  if(me) h += pNotifCard();
+  if(b && b.courts){
+    h += '<div class="card"><div class="rtitle"><h2>สนาม</h2></div><div class="matches">'+b.courts.map(function(c){ return pCourt(c, me); }).join('')+'</div></div>';
+    h += '<div class="card"><h2>รอลงสนาม ('+(b.queue ? b.queue.length : 0)+' คน)</h2>'+((b.queue && b.queue.length) ? '<div class="chips">'+b.queue.map(function(x,i){ return '<span class="chip'+(me && x.s === me.sid ? ' me' : '')+'"><span class="rk">'+(i+1)+'</span>'+avatar(x.s || x.n, x.n)+'<span class="cn">'+esc(x.n)+(me && x.s === me.sid ? ' (คุณ)' : '')+'</span><i>'+x.g+' เกม</i></span>'; }).join('')+'</div>' : '<p class="hint">ยังไม่มีใครรออยู่</p>')+'</div>';
+  }
+  var ago = d && d.board_at ? Math.max(0, Math.round((new Date(d.now) - new Date(d.board_at))/1000)) : null;
+  h += '<p class="hint" style="text-align:center">'+(ago === null ? '' : (ago > 120 ? '⚠️ ผู้จัดการยังไม่ได้อัปเดตข้อมูลมา '+Math.round(ago/60)+' นาที · ' : 'อัปเดตจากผู้จัดการเมื่อ '+ago+' วินาทีก่อน · '))+'<button class="btn sm ghost" data-act="pBack">กลับหน้าผู้จัดการ</button></p>';
+  return h;
+}
+function pMeCard(d){
+  var me = PS.me, st = myState(), h = '';
+  if(!me || (PS.meInfo && PS.meInfo.status === 'out')){
+    var wasOut = me && PS.meInfo && PS.meInfo.status === 'out';
+    h += '<div class="card"><h2>'+(wasOut ? 'ลงชื่ออีกครั้ง' : 'ลงชื่อวันนี้')+'</h2>'+(wasOut ? '<p class="hint" style="margin:-4px 0 8px">คุณยกเลิกหรือถูกนำออกจากรายชื่อ ลงชื่อใหม่ได้ถ้ายังเปิดรับอยู่</p>' : '')+
+      (d && !d.open ? '<p class="hint">ผู้จัดการปิดรับลงชื่อแล้ว</p>' : '<div class="addrow"><input id="pName" class="in" placeholder="ชื่อเล่น" maxlength="30" autocomplete="off" value="'+esc(me ? me.name : '')+'"><select id="pLevel" class="in lv" aria-label="ระดับมือ">'+levelOpts(me && PS.meInfo ? PS.meInfo.level : 3)+'</select><button class="btn" data-act="pJoin">ลงชื่อ</button></div><p class="hint">ระดับมือ: BG &lt; N &lt; S &lt; P- &lt; P &lt; P+ เลือกตามที่ก๊วนใช้</p>')+
+      (PS.formErr ? '<p class="hint" style="color:var(--danger)">'+esc(PS.formErr)+'</p>' : '')+'</div>';
+    return h;
+  }
+  var cls = 'wait', big = 'ลงชื่อแล้ว ✓', small = 'รอผู้จัดการจัดคิวให้';
+  if(st){
+    if(st.k === 'play'){ cls = 'play'; big = 'ถึงคิวคุณแล้ว! 🏸'; small = 'ลง '+st.court+' · เกมที่ '+st.game.no; }
+    else if(st.k === 'queue'){ cls = st.near ? 'near' : 'queue'; big = (st.near ? 'ใกล้ถึงคิวแล้ว ⏳' : 'รอลงสนาม'); small = 'คุณเป็นคิวที่ '+st.pos+' จาก '+st.total+' คน'; }
+    else if(st.k === 'rest'){ cls = 'wait'; big = 'พักอยู่'; small = 'ผู้จัดการให้พักก่อน'; }
+  }
+  h += '<div class="card pstat '+cls+'"><div class="who">'+avatar(me.sid, me.name)+' <b>'+esc(PS.meInfo ? PS.meInfo.name : me.name)+'</b> <i>('+LEVELS[(PS.meInfo ? PS.meInfo.level : 3)-1]+')</i></div><div class="pbig">'+big+'</div><div class="psmall">'+small+'</div>'+
+    '<div class="btnrow" style="justify-content:center"><button class="btn sm ghost" data-act="pLeave">ยกเลิกการลงชื่อ</button></div></div>';
+  return h;
+}
+function pNotifCard(){
+  var perm = typeof Notification === 'undefined' ? 'unsupported' : Notification.permission;
+  var ios = /iPhone|iPad|iPod/.test(navigator.userAgent), line = /Line\//i.test(navigator.userAgent);
+  var pushOk = PS.meInfo && PS.meInfo.push, tips = [];
+  if(line) tips.push('คุณเปิดอยู่ในเบราว์เซอร์ของ LINE ซึ่งมักรับแจ้งเตือนตอนปิดหน้าไม่ได้ กด ⋯ แล้วเลือก “เปิดในเบราว์เซอร์” (Safari/Chrome) ก่อนเปิดการแจ้งเตือน');
+  if(ios && !isStandalone()) tips.push('iPhone: ต้องกด Share แล้ว “เพิ่มไปยังหน้าจอโฮม” (iOS 16.4 ขึ้นไป) แล้วเปิดจากไอคอนนั้น ถึงจะรับแจ้งเตือนตอนปิดหน้าได้');
+  if(!PS.cfg || !PS.cfg.vapid) tips.push('ผู้จัดการยังไม่ได้ตั้งค่า Web Push จะแจ้งเตือนได้เฉพาะตอนเปิดหน้านี้ค้างไว้');
+  var status = pushOk ? '✅ เปิดการแจ้งเตือนแล้ว (รับได้แม้ปิดหน้านี้)' : (PS.soundOn ? '🔔 เปิดแจ้งเตือนในหน้านี้แล้ว (ต้องเปิดหน้านี้ค้างไว้)' : 'ยังไม่ได้เปิดการแจ้งเตือน');
+  if(perm === 'denied') status = '🚫 เบราว์เซอร์บล็อกการแจ้งเตือนไว้ ต้องไปเปิดในการตั้งค่าของเว็บไซต์';
+  return '<div class="card"><h2>🔔 แจ้งเตือนตอนถึงคิว</h2><p class="hint" style="margin:-4px 0 10px">'+status+'</p>'+
+    '<div class="btnrow"><button class="btn" data-act="pNotifOn">'+(pushOk || PS.soundOn ? '🔔 ตั้งค่าใหม่' : '🔔 เปิดการแจ้งเตือน')+'</button><button class="btn ghost" data-act="pTest">ทดสอบเสียง/สั่น</button>'+(pushOk || PS.soundOn ? '<button class="btn ghost" data-act="pNotifOff">ปิด</button>' : '')+'</div>'+
+    (PS.notifMsg ? '<p class="hint">'+esc(PS.notifMsg)+'</p>' : '')+tips.map(function(t){ return '<p class="hint">💡 '+esc(t)+'</p>'; }).join('')+'</div>';
+}
+function pRender(){
+  var a = document.activeElement;
+  if(a && /INPUT|SELECT|TEXTAREA/.test(a.tagName) && $('#app').contains(a)){ PS.pendingP = true; return; }
+  PS.pendingP = false;
+  $('#app').className = 'app';
+  $('#app').innerHTML = pHTML();
+  $('#nav').innerHTML = '';
+}
+document.addEventListener('focusout', function(){ if(PCODE && PS.pendingP) setTimeout(pRender, 60); });
+function pEnableAudio(){ try{ PS.audio = PS.audio || new (window.AudioContext || window.webkitAudioContext)(); if(PS.audio.resume) PS.audio.resume(); }catch(e){} PS.soundOn = true; try{ localStorage.setItem('kuaa-sound','1'); }catch(e){} }
+A.pDismiss = function(){ PS.banner = null; pRender(); };
+A.pRetry = function(){ PS.err = ''; PS.loaded = false; pRender(); pPoll(); };
+A.pBack = function(id, el, ev){ if(ev) ev.preventDefault(); try{ localStorage.removeItem('kuaa-last-j'); }catch(e){} location.href = location.href.split('#')[0].split('?')[0]; };
+A.pJoin = function(){
+  var name = ($('#pName').value || '').trim(), lv = parseInt($('#pLevel').value, 10) || 3;
+  if(!name){ PS.formErr = 'ใส่ชื่อเล่นก่อนนะ'; PS.pendingP = false; pRender(); return; }
+  pEnableAudio();
+  PS.formErr = '';
+  var go = function(){
+    if(PS.me && PS.meInfo && PS.meInfo.status === 'out'){
+      return sb(PS.cfg, 'kuaa_update_me', {p_sid:PS.me.sid, p_secret:PS.me.secret, p_name:name, p_level:lv, p_status:'in'}).then(function(){ PS.me.name = name; });
+    }
+    var secret = rnd24();
+    return sb(PS.cfg, 'kuaa_join', {p_code:PS.code, p_name:name, p_level:lv, p_secret:secret}).then(function(r){ PS.me = {sid:r.sid, secret:secret, name:name}; });
+  };
+  go().then(function(){
+    try{ localStorage.setItem(PME(PS.code), JSON.stringify(PS.me)); }catch(e){}
+    PS.meInfo = null; PS.lastMe = 0; PS.prev = null; document.activeElement && document.activeElement.blur && document.activeElement.blur(); pPoll();
+  }).catch(function(e){ PS.formErr = errText(e); PS.pendingP = false; pRender(); });
+};
+A.pLeave = function(){
+  if(!PS.me) return;
+  sb(PS.cfg, 'kuaa_update_me', {p_sid:PS.me.sid, p_secret:PS.me.secret, p_status:'out'}).then(function(){ PS.meInfo = null; PS.lastMe = 0; PS.prev = null; pPoll(); })
+    .catch(function(e){ PS.formErr = errText(e); pRender(); });
+};
+A.pTest = function(){ pEnableAudio(); pAlert('turn', 'ทดสอบแจ้งเตือน 🏸', 'ถ้าได้ยินเสียง/รู้สึกสั่น แปลว่าแจ้งเตือนในหน้านี้ใช้ได้'); pRender(); };
+A.pNotifOn = function(){
+  pEnableAudio(); PS.notifMsg = '';
+  var canPush = 'serviceWorker' in navigator && 'PushManager' in window && PS.cfg && PS.cfg.vapid && PS.me;
+  var p = (typeof Notification !== 'undefined' && Notification.requestPermission) ? Promise.resolve(Notification.requestPermission()) : Promise.resolve('unsupported');
+  p.then(function(perm){
+    if(perm !== 'granted'){ PS.notifMsg = perm === 'denied' ? 'ถูกบล็อก: ไปเปิดการแจ้งเตือนของเว็บนี้ในการตั้งค่าเบราว์เซอร์' : 'ยังไม่ได้อนุญาตการแจ้งเตือน (ใช้ได้เฉพาะเสียง/สั่นตอนเปิดหน้านี้)'; return; }
+    if(!canPush){ PS.notifMsg = 'อุปกรณ์/เบราว์เซอร์นี้ยังรับ Web Push ไม่ได้ ใช้ได้เฉพาะแจ้งเตือนตอนเปิดหน้านี้ค้างไว้'; return; }
+    return navigator.serviceWorker.register('sw.js').then(function(){ return navigator.serviceWorker.ready; }).then(function(reg){
+      PS.swReg = reg;
+      return reg.pushManager.getSubscription().then(function(s){ return s || reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlB64ToU8(PS.cfg.vapid)}); });
+    }).then(function(sub){
+      return sb(PS.cfg, 'kuaa_save_push', {p_sid:PS.me.sid, p_secret:PS.me.secret, p_sub:sub.toJSON()});
+    }).then(function(){ PS.meInfo = null; PS.lastMe = 0; PS.notifMsg = 'เปิดการแจ้งเตือนเรียบร้อย'; });
+  }).catch(function(e){ PS.notifMsg = 'เปิดการแจ้งเตือนไม่สำเร็จ: '+(e && e.message ? e.message : e); })
+    .then(function(){ PS.pendingP = false; pRender(); pPoll(); });
+};
+A.pNotifOff = function(){
+  PS.soundOn = false; try{ localStorage.setItem('kuaa-sound','0'); }catch(e){}
+  var done = function(){ PS.meInfo = null; PS.lastMe = 0; PS.notifMsg = 'ปิดการแจ้งเตือนแล้ว'; pRender(); pPoll(); };
+  if(!PS.me) return done();
+  var un = ('serviceWorker' in navigator) ? navigator.serviceWorker.getRegistration().then(function(r){ return r ? r.pushManager.getSubscription() : null; }).then(function(s){ return s ? s.unsubscribe() : null; }).catch(function(){}) : Promise.resolve();
+  un.then(function(){ return sb(PS.cfg, 'kuaa_drop_push', {p_sid:PS.me.sid, p_secret:PS.me.secret}); }).catch(function(){}).then(done);
+};
+
+if(PCODE){ initPlayer(PCODE); } else { render(); startOnline(); }
 })();
 </script>
 </body>
